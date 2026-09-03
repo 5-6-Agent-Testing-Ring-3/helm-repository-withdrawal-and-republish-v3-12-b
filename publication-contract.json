@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
-  "repository": "Tessstttt859/helm-repository-withdrawal-and-republish",
+  "repository": "5-6-Agent-Testing-Ring-3/helm-repository-withdrawal-and-republish-v3-12-b",
   "source_branch": "main",
   "pages_branch": "gh-pages",
-  "pages_url": "https://tessstttt859.github.io/helm-repository-withdrawal-and-republish",
+  "pages_url": "https://5-6-agent-testing-ring-3.github.io/helm-repository-withdrawal-and-republish-v3-12-b",
   "chart": "ledger-api",
   "bad_version": "0.4.0",
   "replacement_version": "0.4.1",
   "bad_tag": "chart-v0.4.0",
   "replacement_tag": "chart-v0.4.1",
   "expected_bad_tag_target": "39f52ee5de62630ee4bc0bfc9caa8c055f64bbac",
-  "expected_pages_tip": "cd804e4953cc3ba2a6b5d3680d39944f3d2fc941",
+  "expected_pages_tip": "c94d20b8c2dee693fbdfcab6403ab0ac1f0abcb8",
   "release_asset_name": "ledger-api-{version}.tgz"
 }
