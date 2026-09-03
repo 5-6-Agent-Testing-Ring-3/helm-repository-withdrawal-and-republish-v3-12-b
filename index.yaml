@@ -9,7 +9,7 @@ entries:
       name: ledger-api
       type: application
       urls:
-        - https://tessstttt859.github.io/helm-repository-withdrawal-and-republish/ledger-api-0.4.0.tgz
+        - https://5-6-agent-testing-ring-3.github.io/helm-repository-withdrawal-and-republish-v3-12-b/ledger-api-0.4.0.tgz
       version: 0.4.0
 generated: "2026-09-01T00:00:00Z"
 
