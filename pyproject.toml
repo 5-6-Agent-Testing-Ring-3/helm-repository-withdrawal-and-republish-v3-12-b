@@ -37,7 +37,7 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
-packages = ["chartpub"]
+files = ["src/chartpub", "tests"]
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers"
@@ -46,6 +46,7 @@ testpaths = ["tests"]
 [tool.coverage.run]
 branch = true
 source = ["chartpub"]
+omit = ["*/chartpub/__main__.py"]
 
 [tool.coverage.report]
 fail_under = 90

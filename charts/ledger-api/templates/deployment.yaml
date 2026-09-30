@@ -16,7 +16,11 @@ spec:
       labels:
         app.kubernetes.io/name: {{ include "ledger-api.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
-        app.kubernetes.io/component: worker
+        # Must equal spec.selector.matchLabels above: Kubernetes rejects a
+        # Deployment whose selector does not match its own pod template, and the
+        # Service below selects the same labels. Version 0.4.0 shipped "worker"
+        # here, which is why it passed `helm lint` and still failed to install.
+        app.kubernetes.io/component: api
     spec:
       serviceAccountName: {{ include "ledger-api.serviceAccountName" . }}
       containers:

@@ -3,10 +3,15 @@ name: ci
 on:
   push:
     branches: [main, "recovery/**"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -20,8 +25,85 @@ jobs:
         with:
           version: v3.17.2
       - run: python -m pip install -e '.[dev]'
-      - run: ruff check .
-      - run: pytest
-      - run: helm lint charts/ledger-api
-      - run: helm template ledger-api charts/ledger-api -f tests/fixtures/values-minimal.yaml
 
+      - name: Formatting
+        run: ruff format --check .
+      - name: Lint
+        run: ruff check .
+      - name: Types (strict)
+        run: mypy
+      - name: Tests with coverage
+        run: pytest --cov=chartpub --cov-report=term-missing --cov-fail-under=90
+      - name: Package build
+        run: python -m build
+
+      - name: Helm lint
+        run: helm lint --strict charts/ledger-api
+      - name: Render every values fixture
+        run: |
+          helm template ledger-api charts/ledger-api >/dev/null
+          for values in tests/fixtures/values-*.yaml; do
+            echo "rendering with ${values}"
+            helm template ledger-api charts/ledger-api -f "${values}" >/dev/null
+          done
+
+      # The staging incident shipped a chart that passed lint and template but
+      # that Kubernetes refuses. These steps exercise the *packaged archive*,
+      # which is what actually gets published, and re-run the structural checks
+      # that caught the defect.
+      - name: Packaged-chart smoke test
+        run: |
+          set -euo pipefail
+          out="$(mktemp -d)"
+          python - "$out" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          from chartpub.archive import package_chart
+          from chartpub.validate import validate_candidate
+
+          artifact = package_chart(Path("charts/ledger-api"), Path(sys.argv[1]), "0.4.1")
+          report = validate_candidate(
+              artifact,
+              values_files=sorted(Path("tests/fixtures").glob("values-*.yaml")),
+              # No cluster in CI: validate client-side plus the structural
+              # invariants that `helm lint` cannot see.
+              server_side=False,
+          )
+          print(json.dumps(report.to_dict(), indent=2))
+          Path(sys.argv[1], "digest").write_text(artifact.sha256, encoding="utf-8")
+          report.raise_for_status()
+          PY
+          echo "packaged digest: $(cat "$out/digest")"
+
+      - name: Packaging is reproducible
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          from chartpub.archive import package_chart
+
+          digests = set()
+          for _ in range(2):
+              with TemporaryDirectory() as out:
+                  digests.add(package_chart(Path("charts/ledger-api"), Path(out), "0.4.1").sha256)
+          assert len(digests) == 1, f"packaging is not reproducible: {digests}"
+          print("reproducible digest:", digests.pop())
+          PY
+
+      - name: Helm can install the packaged archive
+        run: |
+          set -euo pipefail
+          out="$(mktemp -d)"
+          python -c "
+          from pathlib import Path
+          from chartpub.archive import package_chart
+          print(package_chart(Path('charts/ledger-api'), Path('$out'), '0.4.1').path)
+          "
+          helm lint --strict "$out"/ledger-api-0.4.1.tgz
+          helm install chartpub-smoke "$out"/ledger-api-0.4.1.tgz \
+            --dry-run=client --namespace chartpub-smoke >/dev/null
+          helm show chart "$out"/ledger-api-0.4.1.tgz
