@@ -20,7 +20,7 @@ import subprocess
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
@@ -33,6 +33,10 @@ from chartpub.security import scrubbed_environment
 _SELECTOR_KINDS = {"Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"}
 
 CommandRunner = Callable[[Sequence[str]], "CommandResult"]
+
+#: How the isolated test install is performed. See :func:`resolve_install_mode`.
+InstallMode = Literal["auto", "cluster", "server", "skip"]
+INSTALL_MODES: tuple[InstallMode, ...] = ("auto", "cluster", "server", "skip")
 
 
 @dataclass(frozen=True)
@@ -305,6 +309,21 @@ def cluster_reachable(*, runner: CommandRunner) -> bool:
     return result.ok
 
 
+def resolve_install_mode(mode: InstallMode, *, runner: CommandRunner) -> tuple[InstallMode, str]:
+    """Decide how the test install runs, and why.
+
+    ``helm install --dry-run=client`` is not usable offline: Helm initialises its
+    release storage against the API server before it renders anything, so it
+    fails with "cluster unreachable" even in client mode. There is therefore no
+    meaningful offline install; ``auto`` says so instead of pretending.
+    """
+    if mode != "auto":
+        return mode, "requested explicitly"
+    if cluster_reachable(runner=runner):
+        return "server", "a Kubernetes cluster is reachable"
+    return "skip", "no Kubernetes cluster is reachable"
+
+
 def check_test_install(
     artifact: Artifact,
     report: ValidationReport,
@@ -312,35 +331,61 @@ def check_test_install(
     runner: CommandRunner,
     values_files: Sequence[Path] = (),
     namespace: str | None = None,
-    server_side: bool | None = None,
+    mode: InstallMode = "auto",
 ) -> None:
     """Install the packaged archive as an isolated, throwaway test release.
 
-    When a cluster is reachable the install is validated server-side, which is
-    the strongest check available; otherwise it falls back to a client-side
-    install rehearsal and says so. Either way the release name and namespace
-    are chartpub-specific and nothing outside them is touched.
+    ``cluster`` performs a real ``helm install`` into a chartpub-specific
+    namespace and removes it again; this is the strongest check, because the API
+    server rejects objects that merely rendering cannot catch. ``server`` does a
+    server-side dry run, which needs a cluster but writes nothing. ``skip``
+    reports honestly that the install was not exercised. Nothing outside the
+    generated release name and namespace is ever touched.
     """
     release = _release_name(artifact.name, artifact.version)
-    mode = cluster_reachable(runner=runner) if server_side is None else server_side
-    args = [
-        "helm",
-        "install",
-        release,
-        str(artifact.path),
-        "--dry-run=server" if mode else "--dry-run=client",
-        "--namespace",
-        namespace or f"{release}-ns",
-    ]
+    target_namespace = namespace or f"{release}-ns"
+    effective, reason = resolve_install_mode(mode, runner=runner)
+    if effective == "skip":
+        report.record(
+            "test-install",
+            True,
+            f"not exercised: {reason}. The packaged archive was not installed; "
+            "rendered-manifest invariants are still enforced.",
+        )
+        return
+
+    args = ["helm", "install", release, str(artifact.path), "--namespace", target_namespace]
+    if effective == "server":
+        args.append("--dry-run=server")
+    else:
+        args += ["--create-namespace", "--timeout", "120s"]
     for values in values_files:
         args += ["-f", str(values)]
     result = runner(args)
-    where = "server-side" if mode else "client-side (no cluster reachable)"
-    report.record(
-        "test-install",
-        result.ok,
-        f"{where} install of {release} succeeded" if result.ok else result.output[-2000:],
+
+    if effective == "cluster":
+        # Clean up whether or not the install succeeded, and only ever the
+        # release and namespace this function generated.
+        runner(
+            ["helm", "uninstall", release, "--namespace", target_namespace, "--ignore-not-found"]
+        )
+        runner(
+            [
+                "kubectl",
+                "delete",
+                "namespace",
+                target_namespace,
+                "--ignore-not-found",
+                "--wait=false",
+            ]
+        )
+
+    detail = (
+        f"{effective} install of {release} in namespace {target_namespace} succeeded"
+        if result.ok
+        else result.output[-2000:]
     )
+    report.record("test-install", result.ok, detail)
 
 
 def validate_candidate(
@@ -349,7 +394,7 @@ def validate_candidate(
     values_files: Sequence[Path],
     runner: CommandRunner | None = None,
     namespace: str | None = None,
-    server_side: bool | None = None,
+    install_mode: InstallMode = "auto",
 ) -> ValidationReport:
     """Run the full gate. Never mutates anything remote."""
     run = runner or default_runner
@@ -368,6 +413,6 @@ def validate_candidate(
         runner=run,
         values_files=values_files,
         namespace=namespace,
-        server_side=server_side,
+        mode=install_mode,
     )
     return report

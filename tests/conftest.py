@@ -185,7 +185,7 @@ def make_session(
         force=force,
         created=created,
         expect_pages_tip=expect_pages_tip,
-        server_side_install=False,
+        install_mode="skip",
         work_dir=tmp_path / "build",
     )
 

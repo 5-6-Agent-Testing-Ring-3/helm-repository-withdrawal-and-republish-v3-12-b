@@ -19,6 +19,7 @@ from chartpub.validate import (
     discover_values_fixtures,
     helm_available,
     manifest_problems,
+    resolve_install_mode,
     validate_candidate,
 )
 
@@ -119,27 +120,44 @@ def test_test_install_failure_is_reported(
     report = validate_candidate(
         candidate(tmp_path, chart_dir),
         values_files=values_files,
-        runner=FakeHelm(failures={"helm install": (1, "admission webhook denied")}),
+        runner=FakeHelm(cluster=True, failures={"helm install": (1, "admission webhook denied")}),
     )
     assert {c.name for c in report.failures} == {"test-install"}
     assert "admission webhook denied" in next(c.detail for c in report.failures)
 
 
-def test_test_install_uses_an_isolated_release_and_namespace(
+def test_cluster_mode_really_installs_into_an_isolated_namespace_and_cleans_up(
     tmp_path: Path, chart_dir: Path
 ) -> None:
-    helm = FakeHelm()
+    helm = FakeHelm(cluster=True)
     report = ValidationReport()
-    check_test_install(candidate(tmp_path, chart_dir), report, runner=helm, server_side=False)
-    argv = next(c.args for c in helm.commands if c.args[:2] == ("helm", "install"))
-    assert argv[2] == "chartpub-verify-ledger-api-0-4-1"
-    assert "--namespace" in argv
-    assert argv[argv.index("--namespace") + 1] == "chartpub-verify-ledger-api-0-4-1-ns"
-    assert "--dry-run=client" in argv
-    assert "client-side" in report.checks[0].detail
+    check_test_install(candidate(tmp_path, chart_dir), report, runner=helm, mode="cluster")
+    install = next(c.args for c in helm.commands if c.args[:2] == ("helm", "install"))
+    assert install[2] == "chartpub-verify-ledger-api-0-4-1"
+    assert install[install.index("--namespace") + 1] == "chartpub-verify-ledger-api-0-4-1-ns"
+    assert "--create-namespace" in install
+    assert not any(arg.startswith("--dry-run") for arg in install), (
+        "a real install, not a rehearsal"
+    )
+    # Cleanup targets only the generated release and namespace.
+    uninstall = next(c.args for c in helm.commands if c.args[:2] == ("helm", "uninstall"))
+    assert uninstall[2] == "chartpub-verify-ledger-api-0-4-1"
+    delete = next(c.args for c in helm.commands if c.args[:3] == ("kubectl", "delete", "namespace"))
+    assert delete[3] == "chartpub-verify-ledger-api-0-4-1-ns"
+    assert report.checks[0].ok
 
 
-def test_test_install_prefers_server_side_when_a_cluster_answers(
+def test_cluster_mode_cleans_up_even_when_the_install_is_rejected(
+    tmp_path: Path, chart_dir: Path
+) -> None:
+    helm = FakeHelm(cluster=True, failures={"helm install": (1, "selector does not match")})
+    report = ValidationReport()
+    check_test_install(candidate(tmp_path, chart_dir), report, runner=helm, mode="cluster")
+    assert not report.checks[0].ok
+    assert any(c.args[:2] == ("helm", "uninstall") for c in helm.commands)
+
+
+def test_auto_mode_prefers_a_server_side_dry_run_when_a_cluster_answers(
     tmp_path: Path, chart_dir: Path
 ) -> None:
     helm = FakeHelm(cluster=True)
@@ -147,8 +165,43 @@ def test_test_install_prefers_server_side_when_a_cluster_answers(
     check_test_install(candidate(tmp_path, chart_dir), report, runner=helm)
     argv = next(c.args for c in helm.commands if c.args[:2] == ("helm", "install"))
     assert "--dry-run=server" in argv
+    assert not any(c.args[:2] == ("helm", "uninstall") for c in helm.commands), (
+        "nothing to clean up"
+    )
     assert cluster_reachable(runner=helm) is True
     assert cluster_reachable(runner=FakeHelm(cluster=False)) is False
+
+
+def test_auto_mode_reports_honestly_when_no_cluster_is_reachable(
+    tmp_path: Path, chart_dir: Path
+) -> None:
+    """A skipped install must say so, not be silently reported as a pass."""
+    helm = FakeHelm(cluster=False)
+    report = ValidationReport()
+    check_test_install(candidate(tmp_path, chart_dir), report, runner=helm)
+    assert not any(c.args[:2] == ("helm", "install") for c in helm.commands)
+    assert report.checks[0].ok
+    assert "not exercised" in report.checks[0].detail
+    assert "no Kubernetes cluster is reachable" in report.checks[0].detail
+
+
+@pytest.mark.parametrize(
+    ("requested", "cluster", "expected"),
+    [
+        ("auto", True, "server"),
+        ("auto", False, "skip"),
+        ("cluster", False, "cluster"),
+        ("server", False, "server"),
+        ("skip", True, "skip"),
+    ],
+)
+def test_resolve_install_mode(requested: str, cluster: bool, expected: str) -> None:
+    effective, reason = resolve_install_mode(
+        requested,  # type: ignore[arg-type]
+        runner=FakeHelm(cluster=cluster),
+    )
+    assert effective == expected
+    assert reason
 
 
 def test_digest_mismatch_short_circuits_before_helm(tmp_path: Path, chart_dir: Path) -> None:

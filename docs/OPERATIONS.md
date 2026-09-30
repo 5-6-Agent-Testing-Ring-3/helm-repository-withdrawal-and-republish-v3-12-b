@@ -8,6 +8,7 @@ scope by construction.
 - [What went wrong, and what changed](#what-went-wrong-and-what-changed)
 - [State machine](#state-machine)
 - [Publication order](#publication-order)
+- [Test install modes](#test-install-modes)
 - [Withdrawal order](#withdrawal-order)
 - [Recovery procedure](#recovery-procedure)
 - [Dry-run examples](#dry-run-examples)
@@ -97,9 +98,9 @@ deleted. If an undo itself fails, the command exits `6` and names what is left.
 1. **Package** the chart deterministically (local).
 2. **Validate** the packaged archive (local): archive safety and digest, strict
    `helm lint`, render with default values and every `tests/fixtures/values-*.yaml`,
-   rendered-manifest invariants, and an isolated `helm install` test release.
-   A failure stops here, so the public index and the current stable version are
-   untouched.
+   rendered-manifest invariants, and an isolated `helm install` test release
+   (see [Test install modes](#test-install-modes)). A failure stops here, so the
+   public index and the current stable version are untouched.
 3. **Compare-and-swap** the `gh-pages` tip against the expected value. Mismatch
    stops before any write.
 4. **Create the release as a draft** (no tag yet, not listed).
@@ -114,6 +115,33 @@ Steps 4–7 register undo actions, including the tag that step 7 creates. If a
 later step fails, they are undone newest-first; if an undo itself fails, the
 command exits `6` and names every object that still needs attention rather than
 claiming a clean rollback.
+
+## Test install modes
+
+`--install-mode` controls how the isolated test release is exercised. The
+release name is always `chartpub-verify-<chart>-<version>` and the namespace
+`<release>-ns`; nothing outside those is touched.
+
+| Mode | What it does | Catches the 0.4.0 defect? |
+|---|---|---|
+| `cluster` | a real `helm install` into the throwaway namespace, then `helm uninstall` and namespace delete | **yes** — the API server rejects the Deployment |
+| `server` | `helm install --dry-run=server`; needs a cluster, writes nothing | no — a server-side dry run accepts it |
+| `skip` | does not install; reports "not exercised" and why | no |
+| `auto` (default) | `server` if a cluster answers, otherwise `skip` | see above |
+
+Two things worth knowing:
+
+- **There is no useful offline install.** `helm install --dry-run=client` still
+  initialises Helm's release storage against the API server, so it fails with
+  "cluster unreachable" even in client mode. `auto` therefore reports an honest
+  skip rather than pretending a client-side rehearsal happened.
+- **A server-side dry run is not sufficient.** The 0.4.0 selector/label mismatch
+  passes `--dry-run=server` and is only rejected by a real create. That is why
+  `manifest_problems` checks the invariant structurally — it catches the defect
+  deterministically, with or without a cluster — and why CI provisions a `kind`
+  cluster and runs `install_mode="cluster"`. CI also reconstructs the 0.4.0
+  defect and asserts that validation rejects it, so the gate cannot silently
+  regress.
 
 ## Withdrawal order
 
@@ -245,6 +273,7 @@ Other useful read-only invocations:
 
 ```bash
 chartpub plan --offline              # no credential, no network: local plan only
+chartpub publish --dry-run --install-mode cluster   # strongest validation, still no remote write
 chartpub audit --no-strict           # report drift without failing
 chartpub plan --for repair           # what repair would reconcile
 ```

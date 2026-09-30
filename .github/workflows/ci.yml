@@ -24,6 +24,15 @@ jobs:
       - uses: azure/setup-helm@v4
         with:
           version: v3.17.2
+      # A real cluster so the packaged chart is genuinely installed below.
+      # `helm install --dry-run=client` cannot stand in for this: Helm
+      # initialises its release storage against the API server before it renders
+      # anything, and a server-side dry run does not reject every object the API
+      # server would - the 0.4.0 selector/label defect passes it.
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: chartpub-ci
+      - run: kubectl cluster-info
       - run: python -m pip install -e '.[dev]'
 
       - name: Formatting
@@ -49,8 +58,7 @@ jobs:
 
       # The staging incident shipped a chart that passed lint and template but
       # that Kubernetes refuses. These steps exercise the *packaged archive*,
-      # which is what actually gets published, and re-run the structural checks
-      # that caught the defect.
+      # which is what actually gets published, against a real cluster.
       - name: Packaged-chart smoke test
         run: |
           set -euo pipefail
@@ -67,15 +75,58 @@ jobs:
           report = validate_candidate(
               artifact,
               values_files=sorted(Path("tests/fixtures").glob("values-*.yaml")),
-              # No cluster in CI: validate client-side plus the structural
-              # invariants that `helm lint` cannot see.
-              server_side=False,
+              install_mode="cluster",
           )
           print(json.dumps(report.to_dict(), indent=2))
           Path(sys.argv[1], "digest").write_text(artifact.sha256, encoding="utf-8")
           report.raise_for_status()
           PY
           echo "packaged digest: $(cat "$out/digest")"
+
+      # Prove the gate still catches the exact defect that shipped as 0.4.0.
+      - name: Validation rejects the 0.4.0 defect
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import shutil
+          import sys
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          from chartpub.archive import package_chart
+          from chartpub.validate import validate_candidate
+
+          # Re-introduce the 0.4.0 mismatch: give the pod template a component
+          # label that the Deployment selector does not select.
+          SELECTOR = "app.kubernetes.io/component: api"
+          POD_LABEL = "app.kubernetes.io/component: worker"
+
+          with TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              chart = root / "ledger-api"
+              shutil.copytree(Path("charts/ledger-api"), chart)
+              deployment = chart / "templates" / "deployment.yaml"
+              lines = deployment.read_text(encoding="utf-8").splitlines(keepends=True)
+              hits = [i for i, line in enumerate(lines) if line.strip() == SELECTOR]
+              assert len(hits) == 2, f"expected selector and pod-template labels, found {hits}"
+              indent = lines[hits[1]][: len(lines[hits[1]]) - len(lines[hits[1]].lstrip())]
+              lines[hits[1]] = f"{indent}{POD_LABEL}\n"
+              deployment.write_text("".join(lines), encoding="utf-8")
+
+              artifact = package_chart(chart, root / "out", "0.4.1")
+              report = validate_candidate(
+                  artifact,
+                  values_files=sorted(Path("tests/fixtures").glob("values-*.yaml")),
+                  install_mode="cluster",
+              )
+
+          failures = {check.name for check in report.failures}
+          for check in report.failures:
+              print(f"rejected by {check.name}: {check.detail[:400]}")
+          if not failures:
+              sys.exit("the 0.4.0 defect was NOT rejected by validation")
+          assert "manifest-invariants" in failures, failures
+          PY
 
       - name: Packaging is reproducible
         run: |
@@ -94,7 +145,7 @@ jobs:
           print("reproducible digest:", digests.pop())
           PY
 
-      - name: Helm can install the packaged archive
+      - name: Helm can discover and install the packaged archive
         run: |
           set -euo pipefail
           out="$(mktemp -d)"
@@ -104,6 +155,10 @@ jobs:
           print(package_chart(Path('charts/ledger-api'), Path('$out'), '0.4.1').path)
           "
           helm lint --strict "$out"/ledger-api-0.4.1.tgz
-          helm install chartpub-smoke "$out"/ledger-api-0.4.1.tgz \
-            --dry-run=client --namespace chartpub-smoke >/dev/null
           helm show chart "$out"/ledger-api-0.4.1.tgz
+          helm install chartpub-smoke "$out"/ledger-api-0.4.1.tgz \
+            --namespace chartpub-smoke --create-namespace --timeout 120s
+          helm get manifest chartpub-smoke --namespace chartpub-smoke | head -40
+          kubectl get deployment,service,serviceaccount --namespace chartpub-smoke
+          helm uninstall chartpub-smoke --namespace chartpub-smoke
+          kubectl delete namespace chartpub-smoke --wait=false

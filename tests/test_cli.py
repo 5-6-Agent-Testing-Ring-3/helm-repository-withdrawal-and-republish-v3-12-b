@@ -148,7 +148,7 @@ def wire(
         session.repo = gitops.GitRepository(local_clone, redactor=session.redactor)
         session.git_env = None
         session.helm_runner = helm_runner or FakeHelm()  # type: ignore[assignment]
-        session.server_side_install = False
+        session.install_mode = "skip"
         session.work_dir = tmp_path / "cli-build"
         return session
 

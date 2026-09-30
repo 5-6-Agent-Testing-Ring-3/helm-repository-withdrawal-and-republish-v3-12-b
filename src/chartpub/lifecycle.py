@@ -42,6 +42,7 @@ from chartpub.state import Journal, TransactionState
 from chartpub.transaction import Rollback
 from chartpub.validate import (
     CommandRunner,
+    InstallMode,
     ValidationReport,
     default_runner,
     discover_values_fixtures,
@@ -76,7 +77,7 @@ class Session:
     force: bool = False
     created: str = ""
     expect_pages_tip: str | None = None
-    server_side_install: bool | None = None
+    install_mode: InstallMode = "auto"
     work_dir: Path | None = None
 
     def __post_init__(self) -> None:
@@ -173,7 +174,7 @@ def validate(session: Session, artifact: Artifact) -> ValidationReport:
         artifact,
         values_files=values,
         runner=session.helm_runner,
-        server_side=session.server_side_install,
+        install_mode=session.install_mode,
     )
 
 

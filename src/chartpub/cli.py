@@ -28,7 +28,7 @@ from chartpub.github import GitHubClient
 from chartpub.models import PublicationContract, RemoteSnapshot
 from chartpub.security import Redactor, read_env_file, require_token, secret_values
 from chartpub.state import STATE_DIR_NAME, Journal
-from chartpub.validate import default_runner, discover_values_fixtures
+from chartpub.validate import INSTALL_MODES, default_runner, discover_values_fixtures
 
 COMMANDS = ("plan", "publish", "withdraw", "audit", "repair")
 
@@ -106,11 +106,15 @@ def build_parser() -> argparse.ArgumentParser:
             )
         if name in {"plan", "publish"}:
             command.add_argument(
-                "--server-side-install",
-                dest="server_side",
-                action=argparse.BooleanOptionalAction,
-                default=None,
-                help="force or forbid server-side validation of the isolated test install",
+                "--install-mode",
+                dest="install_mode",
+                choices=INSTALL_MODES,
+                default="auto",
+                help=(
+                    "how to exercise the isolated test install: 'cluster' really installs "
+                    "and uninstalls, 'server' does a server-side dry run, 'skip' does not "
+                    "install and says so, 'auto' picks server or skip by reachability"
+                ),
             )
         if name == "plan":
             command.add_argument(
@@ -187,7 +191,7 @@ def _build_session(
         force=bool(getattr(args, "force", False)),
         created=args.created or "",
         expect_pages_tip=args.expect_pages_tip,
-        server_side_install=getattr(args, "server_side", None),
+        install_mode=getattr(args, "install_mode", "auto"),
     )
 
 
