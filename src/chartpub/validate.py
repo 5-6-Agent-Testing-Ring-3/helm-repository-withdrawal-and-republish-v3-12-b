@@ -365,7 +365,10 @@ def check_test_install(
 
     if effective == "cluster":
         # Clean up whether or not the install succeeded, and only ever the
-        # release and namespace this function generated.
+        # release and namespace this function generated. The namespace delete
+        # *waits*: the release name is deterministic, so a back-to-back run would
+        # otherwise collide with a namespace still in Terminating and report a
+        # bogus failure.
         runner(
             ["helm", "uninstall", release, "--namespace", target_namespace, "--ignore-not-found"]
         )
@@ -376,7 +379,8 @@ def check_test_install(
                 "namespace",
                 target_namespace,
                 "--ignore-not-found",
-                "--wait=false",
+                "--wait=true",
+                "--timeout=120s",
             ]
         )
 

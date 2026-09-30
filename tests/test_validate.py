@@ -144,6 +144,9 @@ def test_cluster_mode_really_installs_into_an_isolated_namespace_and_cleans_up(
     assert uninstall[2] == "chartpub-verify-ledger-api-0-4-1"
     delete = next(c.args for c in helm.commands if c.args[:3] == ("kubectl", "delete", "namespace"))
     assert delete[3] == "chartpub-verify-ledger-api-0-4-1-ns"
+    # The delete must wait: the release name is deterministic, so a back-to-back
+    # run would otherwise hit a namespace still in Terminating.
+    assert "--wait=true" in delete
     assert report.checks[0].ok
 
 

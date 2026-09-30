@@ -161,4 +161,4 @@ jobs:
           helm get manifest chartpub-smoke --namespace chartpub-smoke | head -40
           kubectl get deployment,service,serviceaccount --namespace chartpub-smoke
           helm uninstall chartpub-smoke --namespace chartpub-smoke
-          kubectl delete namespace chartpub-smoke --wait=false
+          kubectl delete namespace chartpub-smoke --timeout=120s
