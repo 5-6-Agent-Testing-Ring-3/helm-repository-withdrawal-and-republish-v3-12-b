@@ -1,3 +1,14 @@
 apiVersion: v1
-entries: {}
-generated: '2026-09-01T00:00:00Z'
+entries:
+  ledger-api:
+    - apiVersion: v2
+      appVersion: 1.8.2
+      created: '2026-09-30T20:24:37Z'
+      description: Example ledger HTTP API used by the publication recovery exercise
+      digest: e506c3ab6df97a814e9eb606cc02ff51e87939b823eb7345b6d4f249276a9ffa
+      name: ledger-api
+      type: application
+      urls:
+        - https://5-6-agent-testing-ring-3.github.io/helm-repository-withdrawal-and-republish-v3-12-b/ledger-api-0.4.1.tgz
+      version: 0.4.1
+generated: '2026-09-30T20:24:37Z'
